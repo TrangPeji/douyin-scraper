@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Douyin Bulk Scraper</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="bg-anim">
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+    <div class="orb orb-3"></div>
+  </div>
+
+  <div class="container bulk-container">
+    <header class="header">
+      <div class="logo">
+        <div class="logo-icon">
+          <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+            <path d="M14 2C7.373 2 2 7.373 2 14s5.373 12 12 12 12-5.373 12-12S20.627 2 14 2z" fill="url(#logo-grad)"/>
+            <path d="M18.5 10.5V14a4.5 4.5 0 11-4.5-4.5v2a2.5 2.5 0 102.5 2.5V8H18.5v2.5z" fill="white"/>
+            <defs>
+              <linearGradient id="logo-grad" x1="2" y1="2" x2="26" y2="26" gradientUnits="userSpaceOnUse">
+                <stop offset="0%" stop-color="#ff2d55"/>
+                <stop offset="100%" stop-color="#ff6b35"/>
+              </linearGradient>
+            </defs>
+          </svg>
+        </div>
+        <div>
+          <h1 class="logo-title">Douyin Bulk <span class="badge">Tool</span></h1>
+          <p class="logo-sub">Phân tích hàng loạt link Douyin</p>
+        </div>
+      </div>
+    </header>
+
+    <section class="search-section">
+      <div class="search-card glass">
+        <div class="search-label">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/>
+            <path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/>
+          </svg>
+          Nhập danh sách link Douyin (mỗi link 1 dòng)
+        </div>
+        <div class="input-wrap">
+          <textarea 
+            id="urlInput" 
+            class="url-input"
+            rows="6"
+            placeholder="https://v.douyin.com/abc/&#10;https://www.douyin.com/video/123...&#10;Dán 9-10 link vào đây..."
+            spellcheck="false"
+          ></textarea>
+        </div>
+        <div class="button-row">
+          <div class="progress-text" id="progressText"></div>
+          <button id="analyzeBtn" class="analyze-btn" onclick="startBulkAnalysis()">
+            <span class="btn-text">Bắt đầu Phân tích</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Results Table -->
+    <div id="resultsSection" class="results data-table-wrap glass hidden" style="max-width: 100%;">
+      <div class="table-header">
+        <h2>Kết quả Phân tích</h2>
+        <button class="copy-btn" onclick="copyResultTable()" id="copyBtn">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+            <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
+          </svg>
+          Copy Bảng
+        </button>
+      </div>
+
+      <div class="table-scroll">
+        <table class="data-table" id="dataTable">
+          <thead>
+            <tr>
+              <th style="width:50px">STT</th>
+              <th style="width:200px">Link</th>
+              <th style="width:100px">Có Voice?</th>
+              <th>Caption gốc</th>
+              <th>Caption (English)</th>
+              <th style="width:100px">Trạng thái</th>
+            </tr>
+          </thead>
+          <tbody id="tableBody">
+            <!-- Rows injected by JS -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
