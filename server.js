@@ -5,8 +5,9 @@ const puppeteer = require('puppeteer-core');
 const translate = require('translate-google');
 
 const app = express();
-const PORT = 3456;
-const CHROME_PATH = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const PORT = process.env.PORT || 3456;
+const CHROME_PATH = process.env.PUPPETEER_EXECUTABLE_PATH
+  || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 
 app.use(cors());
 app.use(express.json());
