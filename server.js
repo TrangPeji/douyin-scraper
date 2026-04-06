@@ -18,7 +18,7 @@ async function getBrowser() {
   if (_browser && _browser.isConnected()) return _browser;
   _browser = await puppeteer.launch({
     executablePath: CHROME_PATH,
-    headless: true, // headless works well with this simple setup
+    headless: true,
     args: [
       '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
       '--disable-blink-features=AutomationControlled', '--hide-scrollbars', '--mute-audio'
@@ -39,123 +39,238 @@ function normalizeItem(item, videoId, url) {
   const desc = item.desc || item.title || item.share_desc || '';
   const music = item.music || item.bgm_info || null;
   const hasVoice = !!(music && (music.id || music.mid || music.title));
-  
+
   return {
     success: true,
     videoId: String(videoId || item.aweme_id || item.id || ''),
     url: url || `https://www.douyin.com/video/${videoId}`,
     caption: desc,
-    hasVoice: hasVoice
+    hasVoice,
   };
 }
 
-// Ensure browser is ready
-getBrowser();
+// Deep-find helper
+function deepFind(obj, pred, depth = 0) {
+  if (depth > 12) return null;
+  if (pred(obj)) return obj;
+  if (Array.isArray(obj)) {
+    for (const x of obj) { const r = deepFind(x, pred, depth + 1); if (r) return r; }
+  } else if (obj && typeof obj === 'object') {
+    for (const k of Object.keys(obj)) { const r = deepFind(obj[k], pred, depth + 1); if (r) return r; }
+  }
+  return null;
+}
+
+// Find an aweme item that matches the target video ID
+function findAwemeById(obj, targetId) {
+  return deepFind(obj, o =>
+    o && typeof o === 'object' && String(o.aweme_id) === String(targetId)
+  );
+}
+
+// Find any aweme item with statistics
+function findAnyAweme(obj) {
+  return deepFind(obj, o =>
+    o && typeof o === 'object' && o.aweme_id && (o.desc !== undefined || o.statistics)
+  );
+}
+
+// Ensure browser is ready on startup
+getBrowser().catch(e => console.error('Browser launch failed:', e.message));
 
 async function scrapeWithPuppeteer(inputUrl) {
   const browser = await getBrowser();
   const page = await browser.newPage();
-  
+
   try {
-    await page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
+    await page.setUserAgent(
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+    );
     await page.evaluateOnNewDocument(() => {
       Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
     });
 
     let capturedItem = null;
+    let targetVideoId = extractVideoId(inputUrl);
 
+    // ---- Strategy 1: Intercept ALL API responses and find the target aweme ----
     page.on('response', async (response) => {
+      if (capturedItem) return; // already got it
       const url = response.url();
-      if ((url.includes('aweme/detail') || url.includes('iteminfo') || url.includes('aweme/v1/web')) && response.status() === 200) {
+      // Capture any aweme-related API response
+      if (
+        response.status() === 200 &&
+        (url.includes('/aweme/') || url.includes('iteminfo') || url.includes('detail'))
+      ) {
         try {
+          const ct = response.headers()['content-type'] || '';
+          if (!ct.includes('json') && !ct.includes('javascript') && !ct.includes('text')) return;
           const text = await response.text();
-          if (text && text.length > 50) {
-            const json = JSON.parse(text);
-            if (json.aweme_detail) {
-              capturedItem = json.aweme_detail;
-            } else if (json.item_list?.[0]) {
-              capturedItem = json.item_list[0];
+          if (!text || text.length < 50) return;
+          const json = JSON.parse(text);
+
+          // Try direct aweme_detail first
+          if (json.aweme_detail) {
+            capturedItem = json.aweme_detail;
+            console.log('[API] ✅ Captured aweme_detail directly');
+            return;
+          }
+
+          // Try item_list
+          if (json.item_list?.[0]) {
+            const match = targetVideoId
+              ? json.item_list.find(i => String(i.aweme_id) === targetVideoId)
+              : json.item_list[0];
+            if (match) {
+              capturedItem = match;
+              console.log('[API] ✅ Captured from item_list');
+              return;
+            }
+          }
+
+          // Try aweme_list (from mix/aweme, etc.)
+          if (json.aweme_list && Array.isArray(json.aweme_list)) {
+            const match = targetVideoId
+              ? json.aweme_list.find(i => String(i.aweme_id) === targetVideoId)
+              : json.aweme_list[0];
+            if (match) {
+              capturedItem = match;
+              console.log('[API] ✅ Captured from aweme_list');
+              return;
+            }
+          }
+
+          // Deep search for target aweme_id
+          if (targetVideoId) {
+            const found = findAwemeById(json, targetVideoId);
+            if (found) {
+              capturedItem = found;
+              console.log('[API] ✅ Captured via deep search');
+              return;
             }
           }
         } catch (_) {}
       }
     });
 
-    console.log('[Puppeteer] Navigating to:', inputUrl);
+    console.log('[Puppeteer] Navigating to:', inputUrl, '(target:', targetVideoId, ')');
 
+    // Navigate and wait for either data capture or timeout
     await new Promise((resolve) => {
       let resolved = false;
       const done = () => { if (!resolved) { resolved = true; resolve(); } };
 
       page.goto(inputUrl, { waitUntil: 'domcontentloaded', timeout: 35000 })
-        .then(done).catch(() => done());
+        .then(() => {
+          // After DOM is loaded, wait a bit more for API responses
+          setTimeout(done, 3000);
+        })
+        .catch(() => done());
 
+      // Check periodically if we captured data
       const interval = setInterval(() => {
         if (capturedItem) {
           clearInterval(interval);
           clearTimeout(maxTimer);
-          setTimeout(done, 800); // Small wait to make sure response body has been read securely
+          setTimeout(done, 500);
         }
-      }, 500);
+      }, 300);
 
       const maxTimer = setTimeout(() => {
         clearInterval(interval);
         done();
-      }, 34000); // Max wait
+      }, 34000);
     });
 
+    // Update targetVideoId from final URL if we didn't have one
+    const finalUrl = page.url();
+    if (!targetVideoId) targetVideoId = extractVideoId(finalUrl);
+
     if (capturedItem) {
-      const finalUrl = page.url();
-      const videoId = extractVideoId(finalUrl) || extractVideoId(inputUrl);
-      return normalizeItem(capturedItem, videoId, finalUrl);
+      console.log('[Result] ✅ Got data from API interception');
+      return normalizeItem(capturedItem, targetVideoId, finalUrl);
     }
-    
-    // Fallback parsing (RENDER_DATA)
-    const fallbackResult = await page.evaluate(() => {
+
+    // ---- Strategy 2: Parse SSR data from the HTML ----
+    console.log('[Fallback] Trying SSR data extraction...');
+    const ssrData = await page.evaluate(() => {
+      // Try RENDER_DATA
+      try {
+        const el = document.getElementById('RENDER_DATA');
+        if (el) {
+          return JSON.parse(decodeURIComponent(el.textContent));
+        }
+      } catch (e) {}
+
+      // Try window.__RENDER_DATA__
       try {
         const rd = window.__RENDER_DATA__;
         if (rd) return typeof rd === 'string' ? JSON.parse(decodeURIComponent(rd)) : rd;
-      } catch(e) {}
+      } catch (e) {}
+
+      // Try NEXT_DATA
+      try {
+        const el = document.getElementById('__NEXT_DATA__');
+        if (el) return JSON.parse(el.textContent);
+      } catch (e) {}
+
       return null;
     });
 
-    if (fallbackResult) {
-      function deepFind(obj, pred, depth=0) {
-        if(depth>10) return null;
-        if(pred(obj)) return obj;
-        if(Array.isArray(obj)) { for(const x of obj) { const r=deepFind(x,pred,depth+1); if(r) return r;} }
-        else if(obj && typeof obj==='object') { for(const k of Object.keys(obj)) { const r=deepFind(obj[k],pred,depth+1); if(r) return r;} }
-        return null;
-      }
-      const item = deepFind(fallbackResult, o => o && typeof o==='object' && (o.aweme_id || o.statistics?.digg_count));
+    if (ssrData) {
+      let item = null;
+      if (targetVideoId) item = findAwemeById(ssrData, targetVideoId);
+      if (!item) item = findAnyAweme(ssrData);
       if (item) {
-        let finalUrl = page.url();
-        return normalizeItem(item, extractVideoId(finalUrl) || extractVideoId(inputUrl), finalUrl);
+        console.log('[Fallback] ✅ Got data from SSR');
+        return normalizeItem(item, targetVideoId, finalUrl);
       }
     }
 
-    return { success: false, url: inputUrl, error: 'Không thể trích xuất dữ liệu từ Douyin.' };
+    // ---- Strategy 3: Extract from page title at minimum ----
+    const title = await page.title();
+    if (title && title.length > 5 && !title.includes('抖音') && title !== '抖音') {
+      // Title often contains the caption: "caption text - 抖音"
+      const caption = title.replace(/\s*-\s*抖音$/, '').trim();
+      if (caption) {
+        console.log('[Fallback] ⚠️ Using page title as caption');
+        return {
+          success: true,
+          partial: true,
+          videoId: targetVideoId || '',
+          url: finalUrl,
+          caption,
+          hasVoice: null,
+          note: '⚡ Chỉ lấy được caption từ tiêu đề trang',
+        };
+      }
+    }
+
+    return { success: false, url: finalUrl || inputUrl, error: 'Không thể trích xuất dữ liệu từ Douyin.' };
   } finally {
-    await page.close().catch(()=>{});
+    await page.close().catch(() => {});
   }
 }
 
+// ─── API Route ────────────────────────────────────────────────────────────────
 app.post('/api/scrape', async (req, res) => {
   const { url } = req.body;
-  if (!url || typeof url !== 'string') return res.status(400).json({ success: false, error: 'URL không hợp lệ' });
+  if (!url || typeof url !== 'string')
+    return res.status(400).json({ success: false, error: 'URL không hợp lệ' });
 
   const trimmedUrl = url.trim();
-  console.log('===== NEW REQUEST =====\nURL:', trimmedUrl);
+  console.log('\n===== NEW REQUEST =====\nURL:', trimmedUrl);
 
   try {
     const data = await scrapeWithPuppeteer(trimmedUrl);
-    
+
+    // Translate caption
     if (data.success && data.caption) {
       try {
         data.captionEnglish = await translate(data.caption, { to: 'en' });
       } catch (e) {
         console.log('Translate error:', e.message);
-        data.captionEnglish = data.caption; // fallback to original
+        data.captionEnglish = data.caption;
       }
     } else {
       data.captionEnglish = '';
@@ -163,7 +278,7 @@ app.post('/api/scrape', async (req, res) => {
 
     res.json(data);
   } catch (err) {
-    console.error('Error:', err.message);
+    console.error('Unhandled error:', err.message);
     res.status(500).json({ success: false, error: `Lỗi xử lý: ${err.message}` });
   }
 });
